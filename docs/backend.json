@@ -1,0 +1,57 @@
+
+{
+  "entities": {
+    "Tenant": {
+      "title": "Tenant",
+      "description": "Un cliente corporativo o unidad de negocio en Terabound.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Nombre comercial del cliente."
+        },
+        "tenantId": {
+          "type": "string",
+          "description": "Identificador único (ej: TC-00124)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "suspended", "maintenance"]
+        },
+        "activeModules": {
+          "type": "array",
+          "description": "Lista de IDs de módulos habilitados para este cliente.",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["name", "tenantId"]
+    },
+    "Module": {
+      "title": "Module",
+      "description": "Un módulo o aplicación dentro del ecosistema Terabound.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string" },
+        "slug": { "type": "string" },
+        "icon": { "type": "string" }
+      }
+    }
+  },
+  "auth": {
+    "providers": ["password", "google.com"]
+  },
+  "firestore": {
+    "/_gl_tenants/{tenantId}": {
+      "schema": { "$ref": "#/backend/entities/Tenant" },
+      "description": "Colección global de clientes del Hub."
+    },
+    "/_gl_modules/{moduleId}": {
+      "schema": { "$ref": "#/backend/entities/Module" },
+      "description": "Colección global de definiciones de módulos."
+    }
+  }
+}

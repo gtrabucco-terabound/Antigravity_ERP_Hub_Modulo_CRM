@@ -1,16 +1,26 @@
 "use client"
 
-import { MOCK_NOTIFICATIONS } from "@/lib/mock-data";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Layers, Bell, ArrowRight, UserCheck, Server, Loader2 } from "lucide-react";
+import { 
+  Users, 
+  Building2, 
+  Briefcase, 
+  DollarSign, 
+  TrendingUp, 
+  Trophy,
+  Plus,
+  ArrowRight,
+  Clock,
+  ChevronRight,
+  Loader2
+} from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { useTenant } from "@/context/tenant-context";
 import { useFirestore, useCollection, useMemoFirebase } from "@/firebase";
-import { useMembership } from "@/firebase/auth/use-membership";
-import { collection, query, where, documentId } from "firebase/firestore";
+import { collection, query, where, orderBy, limit } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 
 export default function DashboardPage() {
@@ -18,159 +28,204 @@ export default function DashboardPage() {
   const { selectedTenant } = useTenant();
   const router = useRouter();
   
-  // IDs de módulos habilitados para el tenant seleccionado
-  const activeModuleIds = selectedTenant?.activeModules || [];
+  const tenantId = selectedTenant?.id || "";
 
-  // Consulta real a _gl_modules basada en los IDs habilitados
-  const modulesQuery = useMemoFirebase(() => {
-    if (!db || !activeModuleIds.length) return null;
-    return query(collection(db, "_gl_modules"), where(documentId(), 'in', activeModuleIds));
-  }, [db, activeModuleIds]);
+  // Queries for Dashboard Data
+  const leadsQuery = useMemoFirebase(() => {
+    if (!db || !tenantId) return null;
+    return query(collection(db, "tenants", tenantId, "leads"));
+  }, [db, tenantId]);
 
-  const { membership } = useMembership();
-  const userRole = membership?.role || "OPERATIVE";
+  const accountsQuery = useMemoFirebase(() => {
+    if (!db || !tenantId) return null;
+    return query(collection(db, "tenants", tenantId, "accounts"));
+  }, [db, tenantId]);
 
-  // Mapeo de permisos (ID -> Roles permitidos)
-  // Nota: En una fase avanzada esto vendría de Firestore, pero por ahora seguimos la lógica del Sidebar
-  const MODULE_PERMISSIONS: Record<string, string[]> = {
-    "mod_crm": ["ADMIN_OWNER"],
-    "mod_inv": ["ADMIN_OWNER", "SUPERVISOR"],
-    "mod_fin": ["ADMIN_OWNER", "SUPERVISOR"],
-    "9dRWiNsBBLbd1uL3KQk3": ["ADMIN_OWNER", "SUPERVISOR", "OPERATIVE"]
-  };
+  const opportunitiesQuery = useMemoFirebase(() => {
+    if (!db || !tenantId) return null;
+    return query(collection(db, "tenants", tenantId, "opportunities"));
+  }, [db, tenantId]);
 
-  const { data: activeModules, loading: loadingModules } = useCollection(modulesQuery);
-  
-  // Filtrado por Rol (RBAC Técnico)
-  const filteredModules = activeModules?.filter(m => 
-    MODULE_PERMISSIONS[m.id]?.includes(userRole)
-  ) || [];
+  const activityQuery = useMemoFirebase(() => {
+    if (!db || !tenantId) return null;
+    return query(
+      collection(db, "tenants", tenantId, "events"),
+      orderBy("timestamp", "desc"),
+      limit(5)
+    );
+  }, [db, tenantId]);
 
-  const unreadCount = MOCK_NOTIFICATIONS.filter(n => !n.read).length;
+  const { data: leads, loading: loadingLeads } = useCollection(leadsQuery);
+  const { data: accounts, loading: loadingAccounts } = useCollection(accountsQuery);
+  const { data: opportunities, loading: loadingOpportunities } = useCollection(opportunitiesQuery);
+  const { data: activities, loading: loadingActivities } = useCollection(activityQuery);
+
+  const loading = loadingLeads || loadingAccounts || loadingOpportunities;
+
+  // Stats Calculations
+  const activeLeads = leads?.filter((l: any) => l.status !== "LOST" && l.status !== "CONVERTED") || [];
+  const qualifiedLeads = leads?.filter((l: any) => l.status === "QUALIFIED") || [];
+  const activeAccounts = accounts?.filter((a: any) => a.status === "ACTIVE") || [];
+  const openOpportunities = opportunities?.filter((o: any) => o.stage !== "WON" && o.stage !== "LOST") || [];
+  const wonOpportunities = opportunities?.filter((o: any) => o.stage === "WON") || [];
+  const pipelineValue = openOpportunities.reduce((sum: number, o: any) => sum + (o.value || 0), 0);
+
+  const stats = [
+    { title: "Leads Activos", value: activeLeads.length, icon: Users, color: "text-blue-500", bg: "bg-blue-50", href: "/leads?status=active" },
+    { title: "Leads Calificados", value: qualifiedLeads.length, icon: TrendingUp, color: "text-emerald-500", bg: "bg-emerald-50", href: "/leads?status=qualified" },
+    { title: "Cuentas Activas", value: activeAccounts.length, icon: Building2, color: "text-purple-500", bg: "bg-purple-50", href: "/accounts?status=active" },
+    { title: "Oportunidades", value: openOpportunities.length, icon: Briefcase, color: "text-orange-500", bg: "bg-orange-50", href: "/opportunities" },
+    { title: "Valor Pipeline", value: new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'USD' }).format(pipelineValue), icon: DollarSign, color: "text-slate-700", bg: "bg-slate-100", href: "/opportunities" },
+    { title: "Ganadas (Mes)", value: wonOpportunities.length, icon: Trophy, color: "text-yellow-600", bg: "bg-yellow-50", href: "/opportunities?stage=won" },
+  ];
+
+  const pipelineStages = [
+    { name: "Lead", count: leads?.filter((l: any) => l.status === "NEW").length || 0, color: "bg-slate-200" },
+    { name: "Qualified", count: qualifiedLeads.length, color: "bg-blue-200" },
+    { name: "Proposal", count: opportunities?.filter((o: any) => o.stage === "PROPOSAL").length || 0, color: "bg-indigo-200" },
+    { name: "Negotiation", count: opportunities?.filter((o: any) => o.stage === "NEGOTIATION").length || 0, color: "bg-purple-200" },
+    { name: "Won", count: wonOpportunities.length, color: "bg-emerald-200" },
+  ];
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
+        <Loader2 className="h-10 w-10 animate-spin text-primary" />
+        <p className="text-slate-500 font-medium">Cargando Dashboard CRM...</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Bienvenido de nuevo, Alex</h1>
-        <p className="text-slate-500 font-medium">Esto es lo que está pasando hoy en {selectedTenant?.name || 'su organización'}.</p>
+    <div className="space-y-8 pb-10">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-3xl font-bold text-slate-900 tracking-tight">CRM Dashboard</h1>
+          <p className="text-slate-500 font-medium">Visión comercial ejecutiva para {selectedTenant?.name}.</p>
+        </div>
+        <div className="flex gap-3">
+          <Button variant="outline" className="gap-2" onClick={() => router.push('/leads')}>
+            <Plus className="h-4 w-4" /> Nuevo Lead
+          </Button>
+          <Button className="gap-2" onClick={() => router.push('/opportunities')}>
+            <Plus className="h-4 w-4" /> Nueva Oportunidad
+          </Button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <Card className="bg-white border-none shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-semibold text-slate-500">Estado del Cliente</CardTitle>
-            <Server className="h-4 w-4 text-emerald-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">Operacional</div>
-            <p className="text-xs text-emerald-600 mt-1 flex items-center gap-1 font-medium">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              Todos los sistemas normales
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="bg-white border-none shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-semibold text-slate-500">Módulos Habilitados</CardTitle>
-            <Layers className="h-4 w-4 text-primary" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{activeModuleIds.length}</div>
-            <p className="text-xs text-muted-foreground mt-1">Habilitados para {selectedTenant?.tenantId || '---'}</p>
-          </CardContent>
-        </Card>
-        <Card className="bg-white border-none shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-semibold text-slate-500">Alertas Pendientes</CardTitle>
-            <Bell className="h-4 w-4 text-orange-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{unreadCount}</div>
-            <p className="text-xs text-orange-600 mt-1 font-medium">Requiere acción</p>
-          </CardContent>
-        </Card>
-        <Card className="bg-white border-none shadow-sm">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-semibold text-slate-500">Usuarios Totales</CardTitle>
-            <UserCheck className="h-4 w-4 text-primary" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">42</div>
-            <p className="text-xs text-muted-foreground mt-1">5 actualmente en línea</p>
-          </CardContent>
-        </Card>
+      {/* Stats Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        {stats.map((stat, i) => (
+          <Card key={i} className="border-none shadow-sm hover:shadow-md transition-shadow cursor-pointer" onClick={() => router.push(stat.href)}>
+            <CardContent className="p-6">
+              <div className={cn("h-10 w-10 rounded-xl flex items-center justify-center mb-4", stat.bg)}>
+                <stat.icon className={cn("h-5 w-5", stat.color)} />
+              </div>
+              <div className="text-2xl font-bold text-slate-900">{stat.value}</div>
+              <p className="text-xs font-semibold text-slate-500 uppercase mt-1 tracking-wider">{stat.title}</p>
+            </CardContent>
+          </Card>
+        ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <Card className="lg:col-span-2 border-none shadow-sm">
+      {/* Pipeline Visual */}
+      <Card className="border-none shadow-sm overflow-hidden">
+        <CardHeader className="border-b bg-slate-50/50">
+          <CardTitle className="text-lg font-bold">Pipeline Comercial</CardTitle>
+          <CardDescription>Resumen de flujo desde Lead hasta Cierre Ganado.</CardDescription>
+        </CardHeader>
+        <CardContent className="p-6">
+          <div className="flex items-center w-full gap-2 h-24">
+            {pipelineStages.map((stage, i) => (
+              <div key={i} className="flex-1 flex flex-col h-full group cursor-pointer" onClick={() => router.push(`/opportunities`)}>
+                <div className={cn(
+                  "flex-1 rounded-lg flex items-center justify-center transition-all group-hover:opacity-80 relative overflow-hidden",
+                  stage.color
+                )}>
+                  <span className="text-2xl font-black text-slate-900/20 absolute -right-2 -bottom-2 rotate-12">{i + 1}</span>
+                  <div className="text-center z-10">
+                    <div className="text-xl font-bold text-slate-900">{stage.count}</div>
+                    <div className="text-[10px] font-bold uppercase tracking-tighter text-slate-600">{stage.name}</div>
+                  </div>
+                </div>
+                {i < pipelineStages.length - 1 && (
+                  <div className="h-px bg-slate-100 flex-none self-center mx-1" />
+                )}
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Recent Leads */}
+        <Card className="border-none shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <CardTitle>Módulos Habilitados (Base de Datos)</CardTitle>
-              <CardDescription>Módulos cargados dinámicamente desde _gl_modules para {selectedTenant?.name}.</CardDescription>
-            </div>
-            <Button variant="outline" size="sm" asChild>
-              <Link href="/modules">Ver Lanzador</Link>
+            <CardTitle className="text-lg">Leads Recientes</CardTitle>
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/leads" className="text-primary gap-1">Ver todos <ArrowRight className="h-4 w-4" /></Link>
             </Button>
           </CardHeader>
           <CardContent>
-            {loadingModules ? (
-              <div className="flex items-center justify-center py-10">
-                <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                <span className="ml-2 text-slate-500">Cargando módulos...</span>
-              </div>
-            ) : filteredModules.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {filteredModules.map((module: any) => (
-                  <div 
-                    key={module.id} 
-                    onClick={() => router.push(`/view/${module.id}`)}
-                    className="p-4 rounded-xl border border-slate-100 bg-slate-50 hover:border-primary/20 hover:bg-white transition-all cursor-pointer group"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="h-10 w-10 bg-white rounded-lg flex items-center justify-center shadow-sm border border-slate-100 group-hover:border-primary/50">
-                        <Layers className="h-5 w-5 text-primary" />
+            {leads && leads.length > 0 ? (
+              <div className="space-y-4">
+                {leads.slice(0, 5).map((lead: any) => (
+                  <div key={lead.id} className="flex items-center justify-between p-3 rounded-xl hover:bg-slate-50 transition-colors border border-transparent hover:border-slate-100 group cursor-pointer" onClick={() => router.push(`/leads/${lead.id}`)}>
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-700 font-bold">
+                        {lead.name?.charAt(0)}
                       </div>
-                      <Badge variant={module.status === 'active' ? 'secondary' : 'outline'} className="text-[10px]">
-                        {module.status === 'active' ? 'Activo' : 'Mantenimiento'}
-                      </Badge>
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">{lead.name}</p>
+                        <p className="text-xs text-slate-500">{lead.company}</p>
+                      </div>
                     </div>
-                    <div className="mt-4">
-                      <h3 className="font-semibold text-slate-900">{module.name}</h3>
-                      <p className="text-xs text-slate-500 mt-1 line-clamp-1">{module.description}</p>
+                    <div className="flex items-center gap-4">
+                      <Badge variant="outline" className="text-[10px]">{lead.status}</Badge>
+                      <ChevronRight className="h-4 w-4 text-slate-300 group-hover:text-primary transition-colors" />
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
               <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed">
-                <p className="text-sm text-slate-500">No hay módulos habilitados en la base de datos para este cliente.</p>
+                <p className="text-sm text-slate-500">No hay leads registrados aún.</p>
               </div>
             )}
           </CardContent>
         </Card>
 
+        {/* Recent Activity */}
         <Card className="border-none shadow-sm">
           <CardHeader>
-            <CardTitle className="text-lg">Notificaciones Recientes</CardTitle>
+            <CardTitle className="text-lg">Actividad Reciente</CardTitle>
+            <CardDescription>Eventos del ecosistema CRM.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            {MOCK_NOTIFICATIONS.slice(0, 3).map((n) => (
-              <div key={n.id} className="flex gap-3 pb-3 border-b border-slate-50 last:border-0 last:pb-0">
-                <div className={cn(
-                  "h-8 w-8 rounded-full flex items-center justify-center shrink-0",
-                  n.severity === 'high' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'
-                )}>
-                  <Bell className="h-4 w-4" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">{n.title}</p>
-                  <p className="text-xs text-slate-500 line-clamp-1">{n.body}</p>
-                </div>
+          <CardContent>
+            {activities && activities.length > 0 ? (
+              <div className="space-y-6">
+                {activities.map((activity: any) => (
+                  <div key={activity.id} className="flex gap-4 relative">
+                    <div className="h-full w-px bg-slate-100 absolute left-[15px] top-8" />
+                    <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 z-10">
+                      <Clock className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="pb-4">
+                      <p className="text-sm font-semibold text-slate-900">{activity.type}</p>
+                      <p className="text-xs text-slate-500 mt-1">{activity.message || `Evento registrado en el sistema.`}</p>
+                      <p className="text-[10px] text-slate-400 mt-1 uppercase font-bold">
+                        {activity.timestamp ? new Date(activity.timestamp).toLocaleString() : 'Recientemente'}
+                      </p>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-            <Button variant="link" className="w-full text-primary" asChild>
-              <Link href="/notifications">Ver todas las notificaciones <ArrowRight className="ml-2 h-4 w-4" /></Link>
-            </Button>
+            ) : (
+              <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed">
+                <p className="text-sm text-slate-500">Sin actividad reciente registrada.</p>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
